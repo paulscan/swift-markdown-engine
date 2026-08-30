@@ -60,6 +60,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returning `false` (or leaving the hook `nil`) falls back to the previous
   behavior. Wiki-link clicks still go through `onLinkClick` — this hook is
   Markdown-URL-links only.
+- `SyntaxHighlighter.fingerprint()` closes the gap in the four-service
+  change-observation family: `WikiLinkResolver` and `EmbeddedImageProvider`
+  already gate services re-adoption on a coarse fingerprint, and
+  `SyntaxHighlighter` covered its own case — a highlighter that changes its
+  colors in place — through `appearanceDidChangeNotification`, but had no
+  seam for the case where the object itself is replaced (a light-theme
+  bridge → a dark-theme bridge, plain-text → syntax-aware). Adding it as a
+  protocol requirement with a `default { 0 }` extension keeps every existing
+  highlighter untouched; the wrapper checks it in `updateNSView` alongside
+  the two existing fingerprints, and a change trips the same services
+  re-adoption that a wiki-link or image change does, so code blocks repaint
+  under the new highlighter without a rebuild.
 - `MarkdownEditorConfiguration.thematicBreak` (`ThematicBreakStyle`) gives each
   thematic-break marker its own look. CommonMark treats `---`, `***` and `___`
   as one construct with one rendering, so an embedder who wanted a novel-style
