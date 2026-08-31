@@ -184,6 +184,71 @@ public struct NoOpLatexRenderer: LatexRenderer {
     public func render(latex: String, fontSize: CGFloat, theme: MarkdownEditorTheme) -> LatexRenderResult? { nil }
 }
 
+// MARK: - Link icons
+
+/// Supplies a small icon to draw immediately before a link's label. Returning
+/// `nil` leaves the link undecorated — the default for every existing
+/// embedder.
+///
+/// The engine hands the provider the link's authored `href` (a URL link's
+/// raw href, subject to ``BareHrefPolicy``; a wiki link's resolved id, or the
+/// display name when no resolver is registered), the ``LinkKind`` that
+/// selected it, and the link's absolute source-text range for embedder-side
+/// correlation. The provider returns an ``NSImage`` at its natural size or
+/// `nil`. The engine owns everything else about how the icon lands on
+/// screen: sized to line-height, drawn at the leading edge of the label,
+/// baseline-centered on the label's cap-height, invalidated when the
+/// fingerprint changes. A provider has no way to draw arbitrary content,
+/// place icons elsewhere, or override the engine's layout math.
+///
+/// This is the link-side counterpart to the "reference to embedder content"
+/// services (``WikiLinkResolver``, ``EmbeddedImageProvider``,
+/// ``SyntaxHighlighter``, ``LatexRenderer``). Where those fill *content the
+/// engine needs to render*, this one adds a *visual augmentation* on top of
+/// content the engine already renders — a file-browser front-end getting
+/// each `[main.py](main.py)` link's Finder icon in the margin next to its
+/// label, without forking, is the intended shape.
+public protocol LinkIconProvider: Sendable {
+    /// Returns an icon for the link at `range`, or `nil` for no decoration.
+    /// - Parameters:
+    ///   - href: the link's authored href (URL link) or resolved id
+    ///     (wiki link). Falls back to the display name for a wiki link when
+    ///     no ``WikiLinkResolver`` is registered.
+    ///   - kind: which link form matched — see ``LinkKind``.
+    ///   - range: absolute UTF-16 range of the whole link in the source.
+    func icon(for href: String, kind: LinkKind, range: NSRange) -> NSImage?
+
+    /// Coarse fingerprint of the provider's icon set — typically a hash of
+    /// the paths / ids it will resolve. A different value invalidates the
+    /// engine's cached decorations so an icon appearing after a file is
+    /// created on disk gets picked up without waiting for a keystroke.
+    /// Same shape and semantics as ``WikiLinkResolver/fingerprint()``.
+    func fingerprint() -> AnyHashable
+}
+
+public extension LinkIconProvider {
+    func fingerprint() -> AnyHashable { 0 }
+}
+
+/// Which link form the engine matched before asking the provider for an
+/// icon. Passed through so the provider can decide differently for
+/// `[label](href)` vs `[[Name]]` — a file-browser may want icons only for
+/// the former, a note-taking app may want dots for wiki-links against its
+/// own model.
+public enum LinkKind: Sendable {
+    /// A Markdown URL link: `[label](href)`.
+    case markdownURL
+    /// A wiki link: `[[Name]]` or `[[Name|id]]`.
+    case wikiLink
+}
+
+/// Default provider that returns no icon for any link. Existing embedders
+/// get this and stay pixel-identical.
+public struct NoOpLinkIconProvider: LinkIconProvider {
+    public init() {}
+    public func icon(for href: String, kind: LinkKind, range: NSRange) -> NSImage? { nil }
+}
+
 // MARK: - Event Bus
 
 /// Optional notification-name bridge that lets the editor communicate with
@@ -319,6 +384,7 @@ public struct MarkdownEditorServices: Sendable {
     public var images: any EmbeddedImageProvider
     public var syntaxHighlighter: any SyntaxHighlighter
     public var latex: any LatexRenderer
+    public var linkIcons: any LinkIconProvider
     public var bus: MarkdownEditorBus
 
     public init(
@@ -326,12 +392,14 @@ public struct MarkdownEditorServices: Sendable {
         images: any EmbeddedImageProvider = NoOpEmbeddedImageProvider(),
         syntaxHighlighter: any SyntaxHighlighter = PlainTextSyntaxHighlighter(),
         latex: any LatexRenderer = NoOpLatexRenderer(),
+        linkIcons: any LinkIconProvider = NoOpLinkIconProvider(),
         bus: MarkdownEditorBus = .default
     ) {
         self.wikiLinks = wikiLinks
         self.images = images
         self.syntaxHighlighter = syntaxHighlighter
         self.latex = latex
+        self.linkIcons = linkIcons
         self.bus = bus
     }
 

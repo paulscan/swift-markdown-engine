@@ -41,6 +41,16 @@ extension NSAttributedString.Key {
     static let scrollableBlockTotalHeight = NSAttributedString.Key("ScrollableBlockTotalHeight")
     /// NSValue(range:) — full multi-line range of a rendered table, used to scope width-change restyles.
     static let scrollableBlockFullRange = NSAttributedString.Key("ScrollableBlockFullRange")
+    /// NSImage — icon the styler asked the ``LinkIconProvider`` for; drawn
+    /// leading-inset before the link's label, on the opening marker's
+    /// character (which is already hidden by marker-shrink). The
+    /// accompanying `linkIconBounds` gives its target size.
+    static let linkIcon = NSAttributedString.Key("MarkdownLinkIcon")
+    /// NSValue(rect:) — draw size for the icon at ``linkIcon``. The styler
+    /// resolves the image's natural size against the current line height
+    /// and writes the result here so the fragment draws without re-doing
+    /// the sizing math per frame.
+    static let linkIconBounds = NSAttributedString.Key("MarkdownLinkIconBounds")
 }
 
 public extension NSAttributedString.Key {
@@ -110,6 +120,10 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
         // 2. LaTeX images (behind text — hidden markers are invisible anyway)
         drawLatexImages(at: point, in: context)
+
+        // 2b. Link icons — same "attribute on a hidden marker char" trick as
+        // LaTeX, drawn before the label glyph so it reads as a leading margin.
+        drawLinkIcons(at: point, in: context)
 
         // 3. Normal text
         super.draw(at: point, in: context)
@@ -487,6 +501,40 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                                   width: imageBounds.width, height: imageBounds.height)
             }
             image.draw(in: drawRect)
+        }
+    }
+
+    // MARK: - Link Icons
+
+    /// Draws each link's ``LinkIconProvider`` icon centered on the label's
+    /// cap-height at the leading edge of the label. The icon rides on the
+    /// opening marker's character (`[` or the second `[` of `[[`), which
+    /// the styler has already widened via kern to exactly `linkIconBounds`
+    /// width — so the label glyph advances rightward by that amount and the
+    /// icon lands in the reserved gap without overlapping the visible text.
+    private func drawLinkIcons(at point: CGPoint, in context: CGContext) {
+        guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return }
+
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
+        NSGraphicsContext.current = nsContext
+
+        ts.enumerateAttribute(.linkIcon, in: range, options: []) { [weak self] value, attrRange, _ in
+            guard let self, let image = value as? NSImage else { return }
+            let boundsVal = ts.attribute(.linkIconBounds, at: attrRange.location, effectiveRange: nil) as? NSValue
+            let iconBounds = boundsVal?.rectValue ?? CGRect(origin: .zero, size: image.size)
+            guard let pos = drawPosition(forDocumentCharAt: attrRange.location, point: point) else { return }
+            // Center the icon on the label's x-height midline (roughly a
+            // third of a line above the baseline) — its optical center
+            // sits with the middle of the lowercase glyph mass. Baseline-
+            // anchor and cap-height anchor both left the icon sitting
+            // visibly above the text when the icon was taller than the
+            // font's ascender, which is the common case at any body font
+            // for the Finder-icon (~16pt native) shape.
+            let xHeightMidline = pos.baselineY - pos.lineHeight * 0.28
+            let yTop = xHeightMidline - iconBounds.height / 2
+            image.draw(in: CGRect(x: pos.x, y: yTop, width: iconBounds.width, height: iconBounds.height))
         }
     }
 
