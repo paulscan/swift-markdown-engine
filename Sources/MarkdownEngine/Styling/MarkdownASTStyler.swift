@@ -78,6 +78,11 @@ enum MarkdownASTStyler {
             styleBlock(block, font: baseFont, ctx: ctx, into: &attrs)
         }
         shrinkInactiveMarkers(in: blocks, ctx: ctx, into: &attrs)
+        // Runs after shrink so the icon's kern overrides the shrink's
+        // negative kern on the leading marker. `NoOpLinkIconProvider` returns
+        // nil for every link and the pass emits nothing — the byte-identical
+        // path.
+        styleLinkIcons(in: blocks, ctx: ctx, into: &attrs)
 
         // Text/regex passes (AST-agnostic); AST code ranges drive the "skip inside code" checks.
         let codeRanges = collectCodeRanges(in: blocks)
@@ -905,6 +910,96 @@ enum MarkdownASTStyler {
         }
         if !contentAttrs.isEmpty { attrs.append((name, contentAttrs)) }
         for marker in markers { attrs.append((marker, [.foregroundColor: ctx.theme.mutedText])) }
+    }
+
+    // MARK: - Link icons
+
+    /// Walks every link and asks ``LinkIconProvider`` for an icon; when one
+    /// is returned, emits attributes on the first character of the leading
+    /// marker (`[` for a URL link, `[[` for a wiki link) so
+    /// ``MarkdownTextLayoutFragment/drawLinkIcons`` paints there. The kern
+    /// widens the shrunk marker character to `iconWidth + gap`, so the label
+    /// glyph advances rightward by exactly that amount and the icon lands in
+    /// the reserved gap without overlapping visible text.
+    ///
+    /// Skipped on the active link (caret inside) — the leading `[` becomes
+    /// visible again for editing then and an overlaid icon would collide
+    /// with it. Also skipped on inline scopes (heading / list item) so the
+    /// image sizing math never needs to know per-scope font sizes; the
+    /// engine derives the target icon side length from the body font.
+    private static func styleLinkIcons(in blocks: [BlockNode], ctx: Ctx, into attrs: inout [StyledRange]) {
+        let provider = ctx.config.services.linkIcons
+        // Cap the icon side length to the body font's cap-height by way of
+        // a small multiplier — small enough that a monospace canvas doesn't
+        // grow a chunky bar, large enough that a system-sans reader sees
+        // the icon clearly. Providers that want smaller can pre-scale.
+        let iconSide = ceil(ctx.baseFont.pointSize * 1.15)
+        // Roughly one em-space at body size — the label glyph reads as a
+        // separate token from the icon rather than butting into it.
+        let gap: CGFloat = 6
+
+        func handle(_ nodes: [InlineNode]) {
+            for node in nodes {
+                switch node {
+                case .link(let range, _, let urlRange, let markers, let children):
+                    handle(children)
+                    guard !ctx.isActive(range), let openMarker = markers.first, openMarker.length > 0 else { continue }
+                    let href = ctx.ns.substring(with: urlRange)
+                    guard let image = provider.icon(for: href, kind: .markdownURL, range: range) else { continue }
+                    emit(image: image, at: openMarker.location, iconSide: iconSide, gap: gap, ctx: ctx, into: &attrs)
+                case .wikiLink(let range, let name, _, let markers):
+                    guard !ctx.isActive(range), let openMarker = markers.first, openMarker.length > 0 else { continue }
+                    let displayName = ctx.ns.substring(with: name)
+                    let href = ctx.wikiLinkID(range) ?? displayName
+                    guard let image = provider.icon(for: href, kind: .wikiLink, range: range) else { continue }
+                    emit(image: image, at: openMarker.location, iconSide: iconSide, gap: gap, ctx: ctx, into: &attrs)
+                case .emphasis(_, _, _, let children):
+                    handle(children)
+                case .ext(let node):
+                    handle(node.children)
+                default: break
+                }
+            }
+        }
+        for block in blocks where ctx.inScope(block.range) {
+            switch block {
+            case .paragraph(_, let inlines), .heading(_, _, _, let inlines), .blockquote(_, let inlines):
+                handle(inlines)
+            case .list(_, let items):
+                for item in items { handle(item.inlines) }
+            case .ext(let node):
+                handle(node.inlines)
+            default: break
+            }
+        }
+    }
+
+    /// The icon-attribute emit shared by the URL-link and wiki-link cases.
+    /// Attaches on the SINGLE CHARACTER at `charIndex` (the leading marker's
+    /// first glyph): image + drawing bounds for the fragment to consume, and
+    /// a positive kern that outpays the shrink pass's negative kern by
+    /// exactly `iconWidth + gap`.
+    private static func emit(
+        image: NSImage, at charIndex: Int, iconSide: CGFloat, gap: CGFloat,
+        ctx: Ctx, into attrs: inout [StyledRange]
+    ) {
+        let natural = image.size
+        let drawSide = min(iconSide, max(natural.width, natural.height))
+        let scale = drawSide / max(natural.width, natural.height, 1)
+        let drawSize = CGSize(width: natural.width * scale, height: natural.height * scale)
+        let iconBounds = CGRect(origin: .zero, size: drawSize)
+        // Net kern after shrink's -pointSize contribution: our positive kern
+        // has to overpay by the shrink amount so the effective advance is
+        // exactly `drawSize.width + gap`. Shrink runs first and applies to
+        // the full marker range; we run last and apply to this one char, so
+        // our value wins on this char while the rest of the marker (if any —
+        // wiki-link's `[[` is two chars) stays shrunk.
+        let netKern = drawSize.width + gap + ctx.inlineMarkerFont.pointSize
+        attrs.append((NSRange(location: charIndex, length: 1), [
+            .linkIcon: image,
+            .linkIconBounds: NSValue(rect: iconBounds),
+            .kern: netKern,
+        ]))
     }
 
     // MARK: - Marker shrinking (hide syntax of inactive nodes)

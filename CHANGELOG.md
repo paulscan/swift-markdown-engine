@@ -72,6 +72,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the two existing fingerprints, and a change trips the same services
   re-adoption that a wiki-link or image change does, so code blocks repaint
   under the new highlighter without a rebuild.
+- `LinkIconProvider` — joins the service family (`WikiLinkResolver`,
+  `EmbeddedImageProvider`, `SyntaxHighlighter`, `LatexRenderer`) as the
+  link-side hook. Where those services fill *content the engine needs to
+  render*, this one adds a *visual augmentation* on top of content the
+  engine already renders: a small icon drawn immediately before the link's
+  label, on the leading marker's already-hidden character. Intended for
+  file-browser-shaped embedders getting each `[main.py](main.py)` link its
+  Finder icon, or note-taking apps drawing a colored dot next to a wiki link
+  based on whether the target exists — the alternatives (invent a per-link
+  `@fileref` directive, wrangle `NSTextAttachment` from outside the engine,
+  fork) are all worse than filling the missing seam here. The provider
+  returns an `NSImage?`; the engine owns everything else — size (capped to
+  `1.15 × baseFont.pointSize`), position (leading edge of the label),
+  baseline (cap-height centered), invalidation (via `fingerprint()`
+  alongside the existing service fingerprints). A provider can't draw
+  arbitrary content, place icons elsewhere, or override the engine's layout
+  math. `NoOpLinkIconProvider` is the default, so every existing embedder
+  stays pixel-identical.
 - `MarkdownEditorConfiguration.thematicBreak` (`ThematicBreakStyle`) gives each
   thematic-break marker its own look. CommonMark treats `---`, `***` and `___`
   as one construct with one rendering, so an embedder who wanted a novel-style

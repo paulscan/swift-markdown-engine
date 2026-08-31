@@ -550,17 +550,21 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         let newImageFingerprint = configuration.services.images.fingerprint()
         let newWikiFingerprint = configuration.services.wikiLinks.fingerprint()
         let newHighlighterFingerprint = configuration.services.syntaxHighlighter.fingerprint()
+        let newLinkIconFingerprint = configuration.services.linkIcons.fingerprint()
         let imageChanged = newImageFingerprint != context.coordinator.lastImageFingerprint
         let wikiChanged = newWikiFingerprint != context.coordinator.lastWikiFingerprint
         let highlighterChanged = newHighlighterFingerprint != context.coordinator.lastHighlighterFingerprint
-        if imageChanged || wikiChanged || highlighterChanged {
+        let linkIconsChanged = newLinkIconFingerprint != context.coordinator.lastLinkIconFingerprint
+        if imageChanged || wikiChanged || highlighterChanged || linkIconsChanged {
             context.coordinator.lastImageFingerprint = newImageFingerprint
             context.coordinator.lastWikiFingerprint = newWikiFingerprint
             context.coordinator.lastHighlighterFingerprint = newHighlighterFingerprint
+            context.coordinator.lastLinkIconFingerprint = newLinkIconFingerprint
             context.coordinator.configuration.services = configuration.services
             textView.configuration.services = configuration.services
-            // Only an image change needs a layout re-measure; a wiki-link rename is style-only.
-            if imageChanged, let tlm = textView.textLayoutManager {
+            // Both images and link icons change line advance, so their invalidation
+            // needs a layout re-measure; a wiki-link rename is style-only.
+            if (imageChanged || linkIconsChanged), let tlm = textView.textLayoutManager {
                 tlm.invalidateLayout(for: tlm.documentRange)
             }
             // Restyle live tv content — full rebuild would clobber paste-fresh embeds when `text` binding hasn't caught up.
@@ -761,6 +765,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         coordinator.lastImageFingerprint = configuration.services.images.fingerprint()
         coordinator.lastWikiFingerprint = configuration.services.wikiLinks.fingerprint()
         coordinator.lastHighlighterFingerprint = configuration.services.syntaxHighlighter.fingerprint()
+        coordinator.lastLinkIconFingerprint = configuration.services.linkIcons.fingerprint()
         coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
         coordinator.onInlinePreviewKey = onInlinePreviewKey
         coordinator.userPrefersContinuousSpellChecking = configuration.spellChecking.continuousSpellChecking
